@@ -40,16 +40,19 @@ def fancy_sock_test(screenob,server,line=0):
 	"""A helper method for sock_test, takes a curses screen object, the server name and output line as params"""
 	stat = sock_test(server)
 	screenob.addstr(line,0,stat['server'].ljust(25) + stat['status'].ljust(8) + stat['port'] + "\n")
+	screenob.refresh()
 
 def service_stats(screenob):
 	"""	Our hardcoded service monitor
 		Needs to be more configurable, ini file?"""
+	curses.start_color()
+	curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)
 	screenob.clear() 
 	screenob.addstr(9,0,"Updating...\n")
 	screenob.refresh()
 	# Get our headers in
-	screenob.addstr(0,0,"Server".ljust(25) + "Players".ljust(8) + "Max \n",curses.A_UNDERLINE)
-	screenob.addstr(5,0,"Services".ljust(25)+ "Status".ljust(8) + "Port\n",curses.A_UNDERLINE)
+	screenob.addstr(0,0,"Server".ljust(25) + "Players".ljust(8) + "Max \n",curses.color_pair(1))
+	screenob.addstr(6,0,"Services".ljust(25)+ "Status".ljust(8) + "Port\n",curses.color_pair(1))
 	screenob.refresh()
 	# Check the servers themselves
 	fancy_get_info(screenob,'c.nerd.nu',1)
@@ -57,10 +60,9 @@ def service_stats(screenob):
 	fancy_get_info(screenob,'p.nerd.nu',3)
 	fancy_get_info(screenob,'x.nerd.nu',4)
 	# Check some web services
-	fancy_sock_test(screenob,'nerd.nu:80',6)
-	fancy_sock_test(screenob,'mcbouncer.com:80',7)
-	screenob.refresh()
-	screenob.addstr(9,0,"Updated.\n")
+	fancy_sock_test(screenob,'nerd.nu:80',7)
+	fancy_sock_test(screenob,'mcbouncer.com:80',8)
+	screenob.addstr(9,0,"\n")
 	screenob.refresh()
 
 def timed_update(screenob):
