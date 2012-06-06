@@ -2,12 +2,14 @@
 import curses
 import socket
 import thread
-import requests
+import urllib
+import urllib2
 
 from time import sleep
+from datetime import datetime
 
-mc_username = None
-mc_password = None
+mc_username = ''
+mc_password = ''
 screen = None
 curr_line = 0
 
@@ -49,28 +51,30 @@ def sock_test(server):
 
 def mcnetStatus():
 	global curr_line
+	global mc_username
+	global mc_password
 	loginStatus = 'down'
 	loginCode = '-'
 	sessionStatus = 'down'
 	sessionCode = '-'
 
 	try:
-		login = requests.post('https://login.minecraft.net', timeout=4, data={ 'user': mc_username, 'password': mc_password, 'version': 9001 })
-		if login.status_code == requests.codes.ok:
-			loginStatus = 'up'
-		loginCode = str(login.status_code)
-	except requests.exceptions.Timeout:
-		loginCode = 'Timeout'
+		login = urllib2.urlopen('https://login.minecraft.net',data=urllib.urlencode({ 'user': mc_username, 'password': mc_password, 'version': 9001 })) 
+		#login = requests.post('https://login.minecraft.net', timeout=4, data={ 'user': mc_username, 'password': mc_password, 'version': 9001 })
+		loginStatus = 'up'
+		loginCode = str(login.getcode())
+	except urllib2.HTTPError,e:
+		loginCode = e.reason
 	screen.addstr(curr_line, 0, 'Login'.ljust(pad[0]) + loginStatus.ljust(pad[1]) + loginCode + "\n")
 	curr_line  += 1
 	screen.refresh()
 	try:
-		session = requests.get('http://session.minecraft.net/game/joinserver.jsp', timeout=5, params={ 'user': 'fakeUsername', 'sessionId': 'invalid_sessionID', 'serverId': 'randomtext' })
-		if session.status_code == requests.codes.ok:
-			sessionStatus = 'up'
-		sessionCode = str(session.status_code)
-	except requests.exceptions.Timeout:
-		sessionCode = 'timeout'
+		session = urllib2.urlopen('http://session.minecraft.net/game/joinserver.jsp', data=urllib.urlencode({ 'user': 'fakeUsername', 'sessionId': 'invalid_sessionID', 'serverId': 'randomtext' })) 
+		#session = requests.get('http://session.minecraft.net/game/joinserver.jsp', timeout=5, params={ 'user': 'fakeUsername', 'sessionId': 'invalid_sessionID', 'serverId': 'randomtext' })
+		sessionStatus = 'up'
+		sessionCode = str(session.getcode())
+	except urllib2.HTTPError,e:
+		sessionCode = e.reason
 	screen.addstr(curr_line, 0, 'Session'.ljust(pad[0]) + sessionStatus.ljust(pad[1]) + sessionCode + "\n")
 	curr_line  += 1
 	screen.refresh()
@@ -81,8 +85,6 @@ def service_stats():
 	global curr_line
 	curr_line = 1
 	screen.clear()
-	screen.addstr(13,0,"Updating...\n")
-	screen.refresh()
 	# Get our headers in
 	screen.addstr(0,0,"Server".ljust(pad[0]) + "Players".ljust(pad[1]) + "Max".ljust(pad[2]) + "\n",curses.color_pair(1))
 	screen.refresh()
@@ -96,12 +98,13 @@ def service_stats():
 	curr_line += 1
 	sock_test('nerd.nu:80')
 	sock_test('mcbouncer.com:80')
-	screen.addstr(13 ,0 ,"\n")
 	# Check minecraft.net login & session servers
-	#screen.addstr(curr_line,0,"Minecraft.net".ljust(pad[0])+ "Status".ljust(pad[1]) +"Code".ljust(pad[2]) + "\n",curses.color_pair(1))
-	#curr_line += 1
-	#mcnetStatus()
+	if(mc_username and mc_password):
+		screen.addstr(curr_line,0,"Minecraft.net".ljust(pad[0])+ "Status".ljust(pad[1]) +"Code".ljust(pad[2]) + "\n",curses.color_pair(1))
+		curr_line += 1
+		mcnetStatus()
 	screen.refresh()
+	screen.addstr(curr_line,0,str(datetime.now()).ljust(pad[0] + pad[1] + pad[2]) + "\n",curses.color_pair(1))
 
 def timed_update():
 	"""A infinite loop with a sleeper, used to kick off the service stats update every 120s"""
