@@ -1,102 +1,135 @@
-#!/usr/bin/python
-import curses
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 import socket
-import thread
-import operator
+import struct
+import json
+import collections
+import time
+import sys
+import threading
 
-from time import sleep
+class Color(object):
+	reset = chr(27) + "[0m"
+	header = chr(27) + "[33m"
+	value = chr(27) + "[36m"
+	clear = chr(27) + "[2J" + chr(27) + "[H"
 
-screen = None
+class Spark(object):
+	def __init__(self, maxlen = 60):
+		self.data = collections.deque([], maxlen)
 
-padding = {'protocol_version': [4, "p_v"], 'server_version': [6, "s_v"], 'motd': [50, "motd"], 'players': [5, "plrs"], 'max_players': [5, "max"]}
+	def append(self, val):
+		self.data.append(val)
 
-def get_info(host='localhost', port=25565):
-    #Set up our socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(5.0)
-    s.connect((host, port))
-    #Send 0xFE: Server list ping
-    s.send('\xfe\x01')
-    
-    #Read some data
-    d = s.recv(1024)
-    s.close()
-    
-    #Check we've got a 0xFF Disconnect
-    assert d[0] == '\xff'
-    
-    #Remove the packet ident (0xFF) and the short containing the length of the string
-    #Decode UCS-2 string
-    d = d[3:].decode('utf-16be')
-    
-    #Check the first 3 characters of the string are what we expect
-    assert d[:3] == u'\xa7\x31\x00'
-    
-    #Split
-    d = d[3:].split('\x00')
-    
-    #Return a dict of values
-    return {'protocol_version': int(d[0]),
-            'server_version':       d[1],
-            'motd':                 d[2],
-            'players':          int(d[3]),
-            'max_players':      int(d[4])}
+	def last(self):
+		try:
+			return self.data[-1]
+		except:
+			return "?"
 
-def test(host):
-	try:
-		screen.addstr(prst(get_info(host)))
-	except:
-		pass
-	finally:
-		screen.refresh()
+	def _sparkpoint(self, value, min_range, step, ticks):
+		if not type(value) is int:
+			return "?"
+		return ticks[int(round((value - min_range) / step))]
 
-def prst(valdict):
-	retstr = []
-	for key, value in sorted(valdict.iteritems(), key=operator.itemgetter(0)):
-		retstr.append(str(value).strip().ljust(padding[key][0]))
-	return "".join(retstr) + "\n"
+	def render(self):
+		if len(self.data) == 0:
+			return ''
+		min_range = 0
+		# min_range = min(self.data)
+		ticks = u'▁▂▃▅▆▇'
+		step_range = max(filter(lambda x:type(x) == int, self.data)) - min_range
+		step = ((step_range) / float(len(ticks) - 1)) or 1
+		return u''.join(self._sparkpoint(i, min_range, step, ticks) for i in self.data)
 
-def service_stats():
-	""" Our hardcoded service monitor
-		Needs to be more configurable, ini file?"""
-	global curr_line
-	curr_line = 1
-	screen.clear()
-	# Get our headers in
-	screen.addstr("".join([y[1].ljust(y[0]) for x,y in sorted(padding.iteritems(), key=operator.itemgetter(0))])  + "\n",curses.color_pair(1))
-	screen.refresh()
-	# Check the servers themselves
-	test('c.nerd.nu')
-	test('s.nerd.nu')
-	test('p.nerd.nu')
-	test('x.nerd.nu')
-	test('event.nerd.nu')
-	test('hcsmp.com')
-	screen.refresh()
 
-def timed_update():
-	"""A infinite loop with a sleeper, used to kick off the service stats update every 120s"""
-	while 1:
-		sleep(120)
-		service_stats()
+class MCServer(object):
+	def __init__(self, server, port = 25565):
+		self.server = server
+		self.port = port
+		self.history = Spark()
+		self.description = "???"
 
-if __name__ == "__main__":
-	screen = curses.initscr()
-	curses.noecho()
-	curses.curs_set(0)
-	screen.keypad(1)
-	curses.start_color()
-	curses.use_default_colors()
-	curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_WHITE)
-	screen.scrollok(True)
-	screen.addstr("Welcome to the nerd.nu status tool.\n\n")
-	screen.addstr("Auto updating every 2 minutes!\n")
-	screen.addstr("Press R to force a status check.\n")
-	screen.addstr("Press Q to quit.\n")
-	thread.start_new_thread( timed_update , () ) #kick off an auto refresh
+	def unpack_varint(self, s):
+		d = 0
+		for i in range(5):
+			b = ord(s.recv(1))
+			d |= (b & 0x7F) << 7*i
+			if not b & 0x80:
+				break
+		return d
+	 
+	def pack_varint(self, d):
+		o = ""
+		while True:
+			b = d & 0x7F
+			d >>= 7
+			o += struct.pack("B", b | (0x80 if d > 0 else 0))
+			if d == 0:
+				break
+		return o
+	 
+	def pack_data(self, d):
+		return self.pack_varint(len(d)) + d
+	 
+	def pack_port(self, i):
+		return struct.pack('>H', i)
+	 
+	def get_info(self):
+		s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		s.connect((self.server, self.port))
+		# Send handshake + status request
+		s.send(self.pack_data("\x00\x00" + self.pack_data(self.server.encode('utf8')) + self.pack_port(self.port) + "\x01"))
+		s.send(self.pack_data("\x00"))
+		# Read response
+		self.unpack_varint(s)     # Packet length
+		self.unpack_varint(s)     # Packet ID
+		l = self.unpack_varint(s) # String length
+		d = ""
+		while len(d) < l:
+			d += s.recv(1024)
+		# Close our socket
+		s.close()
+		# Load json and return
+		return json.loads(d.decode('utf8'))
+
+	def update(self):
+		try:
+			info = self.get_info()
+			self.history.append(info['players']['online'])
+			self.description = info['description']
+		except:
+			self.history.append("?")
+
+	def render(self):
+		return (Color.header, self.description[:30].ljust(31), Color.reset, Color.value, str(self.history.last()).ljust(4), Color.reset, self.history.render())
+
+def timedUpdater():
 	while True:
-		event = screen.getch()
-		if event == ord("q"): break
-		elif event == ord("r"):
-			service_stats()
-	curses.endwin()
+		for s in servers:
+			s.update()
+		time.sleep(60)
+
+def printLoop():
+	while True:
+		sys.stdout.write(Color.clear + Color.reset)
+		sys.stdout.write("\n".join(map( lambda s:''.join(s.render()), servers)))
+		sys.stdout.flush()
+		time.sleep(20)
+
+if __name__ == '__main__':
+	servers = [
+		MCServer('p.nerd.nu'),
+		MCServer('s.nerd.nu'),
+		MCServer('c.nerd.nu'),
+	]
+
+	t = threading.Thread(target=timedUpdater)
+	t.setDaemon(True)
+	t.start()
+	time.sleep(2)
+	try:
+		printLoop()
+	except KeyboardInterrupt:
+		print 'Got ctrl + C'
+	
